@@ -48,6 +48,26 @@ function authHeaders(accessToken: string): Record<string, string> {
 	return { Authorization: `Bearer ${accessToken}` };
 }
 
+/** Query params required for Shared Drive (and My Drive) file operations. */
+function withDriveSupport(
+	url: string,
+	extra: Record<string, string> = {},
+): string {
+	const parsed = new URL(url);
+	parsed.searchParams.set('supportsAllDrives', 'true');
+	for (const [key, value] of Object.entries(extra)) {
+		parsed.searchParams.set(key, value);
+	}
+	return parsed.toString();
+}
+
+/** List/search params so Shared Drive children are visible. */
+function withDriveListSupport(url: string): string {
+	return withDriveSupport(url, {
+		includeItemsFromAllDrives: 'true',
+	});
+}
+
 function escapeDriveQueryValue(value: string): string {
 	return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -116,6 +136,28 @@ async function requestDriveUrl(
 	);
 }
 
+/**
+ * Resolve a vault root folder by ID (My Drive or Shared Drive).
+ * Prefer this over name lookup so Shared Drive folders work without
+ * listing every drive the user can access.
+ */
+export async function resolveFolderById(
+	accessToken: string,
+	folderId: string,
+): Promise<DriveFile> {
+	const folder = await getFileMetadata(accessToken, folderId);
+	if (folder.mimeType !== 'application/vnd.google-apps.folder') {
+		throw new Error(
+			'The configured Google Drive ID is not a folder. Paste a folder ID from the drive URL.',
+		);
+	}
+	if (folder.trashed) {
+		throw new Error('The configured Google Drive folder is in trash.');
+	}
+	return folder;
+}
+
+/** Legacy My Drive helper: find or create a top-level folder by name under root. */
 export async function findOrCreateFolder(
 	accessToken: string,
 	folderName: string,
@@ -125,7 +167,9 @@ export async function findOrCreateFolder(
 		`name = '${escapedFolderName}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false`,
 	);
 	const listResponse = await requestDriveUrl({
-		url: `${DRIVE_FILES_URL}?q=${query}&fields=files(id,name)&pageSize=10`,
+		url: withDriveListSupport(
+			`${DRIVE_FILES_URL}?q=${query}&fields=files(id,name)&pageSize=10`,
+		),
 		headers: authHeaders(accessToken),
 	});
 	const data = listResponse.json as DriveFileListResponse;
@@ -135,7 +179,7 @@ export async function findOrCreateFolder(
 	}
 
 	const createResponse = await requestDriveUrl({
-		url: DRIVE_FILES_URL,
+		url: withDriveSupport(DRIVE_FILES_URL),
 		method: 'POST',
 		headers: {
 			...authHeaders(accessToken),
@@ -166,7 +210,9 @@ export async function findOrCreateFolderPath(
 			`name = '${escapedPart}' and mimeType = 'application/vnd.google-apps.folder' and '${currentParentId}' in parents and trashed = false`,
 		);
 		const response = await requestDriveUrl({
-			url: `${DRIVE_FILES_URL}?q=${query}&fields=files(id,name)&pageSize=1`,
+			url: withDriveListSupport(
+				`${DRIVE_FILES_URL}?q=${query}&fields=files(id,name)&pageSize=1`,
+			),
 			headers: authHeaders(accessToken),
 		});
 		const data = response.json as DriveFileListResponse;
@@ -175,7 +221,7 @@ export async function findOrCreateFolderPath(
 			currentParentId = data.files[0]!.id;
 		} else {
 			const createResponse = await requestDriveUrl({
-				url: DRIVE_FILES_URL,
+				url: withDriveSupport(DRIVE_FILES_URL),
 				method: 'POST',
 				headers: {
 					...authHeaders(accessToken),
@@ -206,7 +252,9 @@ export async function listFilesInFolder(
 		const query = encodeURIComponent(
 			`'${folderId}' in parents and trashed = false`,
 		);
-		let url = `${DRIVE_FILES_URL}?q=${query}&fields=nextPageToken,files(id,name,md5Checksum,modifiedTime,mimeType,size,trashed,parents,appProperties)&pageSize=1000`;
+		let url = withDriveListSupport(
+			`${DRIVE_FILES_URL}?q=${query}&fields=nextPageToken,files(id,name,md5Checksum,modifiedTime,mimeType,size,trashed,parents,appProperties)&pageSize=1000`,
+		);
 		if (pageToken) {
 			url += `&pageToken=${pageToken}`;
 		}
@@ -359,7 +407,9 @@ async function createFileMetadata(
 	mimeType: string,
 ): Promise<DriveFile> {
 	const response = await requestDriveUrl({
-		url: `${DRIVE_FILES_URL}?fields=${DRIVE_FILE_FIELDS}`,
+		url: withDriveSupport(
+			`${DRIVE_FILES_URL}?fields=${DRIVE_FILE_FIELDS}`,
+		),
 		method: 'POST',
 		headers: {
 			...authHeaders(accessToken),
@@ -381,7 +431,9 @@ async function uploadMediaContent(
 	mimeType: string,
 ): Promise<DriveFile> {
 	const response = await requestDriveUrl({
-		url: `${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=media&fields=${DRIVE_FILE_FIELDS}`,
+		url: withDriveSupport(
+			`${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=media&fields=${DRIVE_FILE_FIELDS}`,
+		),
 		method: 'PATCH',
 		headers: {
 			...authHeaders(accessToken),
@@ -449,6 +501,7 @@ export async function renameFile(
 	let url = `${DRIVE_FILES_URL}/${fileId}`;
 	const params = new URLSearchParams();
 	params.set('fields', DRIVE_FILE_FIELDS);
+	params.set('supportsAllDrives', 'true');
 	if (dirChanged) {
 		params.set('addParents', newParentId!);
 		const file = await getFileMetadata(accessToken, fileId);
@@ -479,7 +532,7 @@ export async function downloadFile(
 	fileId: string,
 ): Promise<ArrayBuffer> {
 	const response = await requestDriveUrl({
-		url: `${DRIVE_FILES_URL}/${fileId}?alt=media`,
+		url: withDriveSupport(`${DRIVE_FILES_URL}/${fileId}?alt=media`),
 		headers: authHeaders(accessToken),
 	});
 	return response.arrayBuffer;
@@ -490,7 +543,7 @@ export async function trashFile(
 	fileId: string,
 ): Promise<void> {
 	await requestDriveUrl({
-		url: `${DRIVE_FILES_URL}/${fileId}`,
+		url: withDriveSupport(`${DRIVE_FILES_URL}/${fileId}`),
 		method: 'PATCH',
 		headers: {
 			...authHeaders(accessToken),
@@ -505,7 +558,9 @@ export async function getFileMetadata(
 	fileId: string,
 ): Promise<DriveFile> {
 	const response = await requestDriveUrl({
-		url: `${DRIVE_FILES_URL}/${fileId}?fields=${DRIVE_FILE_FIELDS}`,
+		url: withDriveSupport(
+			`${DRIVE_FILES_URL}/${fileId}?fields=${DRIVE_FILE_FIELDS}`,
+		),
 		headers: authHeaders(accessToken),
 	});
 	return response.json as DriveFile;

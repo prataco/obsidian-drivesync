@@ -10,6 +10,12 @@ export interface DrivesyncSettings {
 	clientId: string;
 	clientSecret: string;
 	redirectPort: number;
+	/** Preferred: My Drive or Shared Drive folder ID from the Drive URL. */
+	driveFolderId: string;
+	/**
+	 * Legacy My Drive folder name. Used only when driveFolderId is empty
+	 * (find-or-create under My Drive root). Prefer driveFolderId for Shared Drives.
+	 */
 	driveFolderName: string;
 	debounceMs: number;
 	autoSync: boolean;
@@ -19,6 +25,7 @@ export const DEFAULT_SETTINGS: DrivesyncSettings = {
 	clientId: '',
 	clientSecret: '',
 	redirectPort: DEFAULT_REDIRECT_PORT,
+	driveFolderId: '',
 	driveFolderName: DEFAULT_DRIVE_FOLDER_NAME,
 	debounceMs: DEFAULT_DEBOUNCE_MS,
 	autoSync: true,
@@ -95,16 +102,16 @@ export class DrivesyncSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Sync').setHeading();
 
 		const driveFolderSetting = new Setting(containerEl)
-			.setName('Google Drive folder')
+			.setName('Google Drive folder ID')
 			.setDesc(
-				'Name of the top-level Google Drive folder used for this vault. The folder is created if it does not exist.',
+				'Folder ID from the Google Drive URL (works for my drive and shared drives). Example: open the folder in drive and copy the ID after /folders/. Using an ID avoids listing every drive folder.',
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder(DEFAULT_DRIVE_FOLDER_NAME)
-					.setValue(this.plugin.settings.driveFolderName)
+					.setPlaceholder('1Abcdefghijklmnopqrstuvwxyz')
+					.setValue(this.plugin.settings.driveFolderId)
 					.onChange(async (value) => {
-						await this.plugin.setDriveFolderName(value);
+						await this.plugin.setDriveFolderId(value);
 					}),
 			);
 		if (this.plugin.tokenData) {
@@ -114,6 +121,22 @@ export class DrivesyncSettingTab extends PluginSettingTab {
 					this.render();
 				}),
 			);
+		}
+
+		if (!this.plugin.settings.driveFolderId.trim()) {
+			new Setting(containerEl)
+				.setName('Legacy folder name (my drive only)')
+				.setDesc(
+					'Used only when folder ID is empty. Creates or finds a top-level folder in my drive. Shared drives require a folder ID.',
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder(DEFAULT_DRIVE_FOLDER_NAME)
+						.setValue(this.plugin.settings.driveFolderName)
+						.onChange(async (value) => {
+							await this.plugin.setDriveFolderName(value);
+						}),
+				);
 		}
 
 		new Setting(containerEl)
@@ -174,8 +197,11 @@ export class DrivesyncSettingTab extends PluginSettingTab {
 				: 'Not connected.',
 		});
 		if (this.plugin.syncState) {
+			const folderLabel = this.plugin.syncState.rootFolderId
+				? `${this.plugin.syncState.rootFolderName} (${this.plugin.syncState.rootFolderId})`
+				: this.plugin.syncState.rootFolderName;
 			statusEl.createEl('p', {
-				text: `Drive folder: ${this.plugin.syncState.rootFolderName}`,
+				text: `Drive folder: ${folderLabel}`,
 			});
 		}
 		if (this.plugin.authorizationUpgradeRequired) {
@@ -186,7 +212,7 @@ export class DrivesyncSettingTab extends PluginSettingTab {
 		}
 		if (connected && !folderSelectionCurrent) {
 			statusEl.createEl('p', {
-				text: 'Select apply beside Google Drive folder to use the new folder.',
+				text: 'Select apply beside Google Drive folder ID to use the new folder.',
 				cls: 'drivesync-warning',
 			});
 		}

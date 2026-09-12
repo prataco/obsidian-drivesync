@@ -60,7 +60,10 @@ enough to keep your Obsidian vault in sync.
 
 1. Open **Settings → Community plugins → DriveSync**.
 2. Paste your **Client ID** and **Client secret**
-3. Enter the top-level Google Drive folder to use for this vault
+3. Paste the **Google Drive folder ID** for this vault
+   - Open the target folder in [Google Drive](https://drive.google.com)
+   - Copy the ID from the URL (`…/folders/<FOLDER_ID>`)
+   - Works for **My Drive** and **Shared Drives** without granting a folder browser
 4. Leave the redirect port at `8520` (or change it if you used a different one in step 2)
 5. Open the command palette with `Ctrl+P` (Windows/Linux) or `Command+P` (macOS), then perform **Connect Google Drive**
 6. Your browser opens. Sign in with your Google account and authorize the app
@@ -69,7 +72,9 @@ enough to keep your Obsidian vault in sync.
 DriveSync requests full Google Drive access because it must discover, download,
 update, move, and delete files that already exist inside the synchronized
 folder. Google limits the narrower `drive.file` scope to files created by the
-plugin or explicitly selected through Google Picker.
+plugin or explicitly selected through Google Picker. Shared Drive folders are
+supported when you configure the folder by ID; Drive API calls use
+`supportsAllDrives`.
 
 ## Commands
 
@@ -87,7 +92,7 @@ plugin or explicitly selected through Google Picker.
 | Google OAuth client ID | — | From Google Cloud Console |
 | Google OAuth client secret | — | From Google Cloud Console |
 | Redirect port | `8520` | Local port for OAuth callback |
-| Google Drive folder | `Obsidian Vault` | Top-level Drive folder used for this vault |
+| Google Drive folder ID | — | Folder ID from the Drive URL (My Drive or Shared Drive) |
 | Auto-sync on file changes | On | Upload changes as you edit |
 | Debounce (ms) | `2000` | Wait time after last change before uploading |
 

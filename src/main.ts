@@ -14,7 +14,7 @@ import {
 } from './settings';
 import type { TokenData, SyncState } from './types';
 import { startAuthFlow } from './auth/oauth';
-import { findOrCreateFolder } from './drive/client';
+import { findOrCreateFolder, resolveFolderById } from './drive/client';
 import { SyncCoordinator } from './drive/coordinator';
 import { startRemoteChangePoller } from './drive/change-poller';
 import { startConfigWatcher } from './config-watcher';
@@ -216,6 +216,14 @@ export default class ObsidianDriveSync extends Plugin {
 		if (this.syncState && !this.syncState.rootFolderName) {
 			this.syncState.rootFolderName = DEFAULT_DRIVE_FOLDER_NAME;
 		}
+		// Migrate connected installs: prefer folder ID so Shared Drives work
+		// without listing every Drive folder.
+		if (
+			!this.settings.driveFolderId.trim() &&
+			this.syncState?.rootFolderId
+		) {
+			this.settings.driveFolderId = this.syncState.rootFolderId;
+		}
 		this.updateStatusBar();
 	}
 
@@ -308,11 +316,28 @@ export default class ObsidianDriveSync extends Plugin {
 	}
 
 	isDriveFolderSelectionCurrent(): boolean {
+		if (!this.syncState) return false;
+		const folderId = this.settings.driveFolderId.trim();
+		if (folderId) {
+			return this.syncState.rootFolderId === folderId;
+		}
 		return (
-			this.syncState !== null &&
 			this.syncState.rootFolderName ===
-				this.settings.driveFolderName.trim()
+			this.settings.driveFolderName.trim()
 		);
+	}
+
+	async setDriveFolderId(value: string): Promise<void> {
+		const folderId = value.trim();
+		if (this.settings.driveFolderId === folderId) return;
+
+		this.settings.driveFolderId = folderId;
+		if (!this.isDriveFolderSelectionCurrent()) {
+			this.stopAutoSync();
+			this.syncCoordinator.clear();
+		}
+		await this.saveAllData();
+		this.updateStatusBar();
 	}
 
 	async setDriveFolderName(value: string): Promise<void> {
@@ -335,10 +360,11 @@ export default class ObsidianDriveSync extends Plugin {
 			);
 			return;
 		}
+		const driveFolderId = this.settings.driveFolderId.trim();
 		const driveFolderName = this.settings.driveFolderName.trim();
-		if (!driveFolderName) {
+		if (!driveFolderId && !driveFolderName) {
 			new Notice(
-				'Drivesync: Enter a Google Drive folder name in settings first.',
+				'Drivesync: Enter a Google Drive folder ID in settings first (required for shared drives).',
 			);
 			return;
 		}
@@ -356,21 +382,36 @@ export default class ObsidianDriveSync extends Plugin {
 			);
 
 			const accessToken = tokenData.accessToken;
-			const rootFolderId = await findOrCreateFolder(
-				accessToken,
-				driveFolderName,
-			);
+			let rootFolderId: string;
+			let rootFolderName: string;
+
+			if (driveFolderId) {
+				const folder = await resolveFolderById(
+					accessToken,
+					driveFolderId,
+				);
+				rootFolderId = folder.id;
+				rootFolderName = folder.name;
+				this.settings.driveFolderId = rootFolderId;
+			} else {
+				rootFolderId = await findOrCreateFolder(
+					accessToken,
+					driveFolderName,
+				);
+				rootFolderName = driveFolderName;
+				this.settings.driveFolderId = rootFolderId;
+			}
 
 			this.tokenData = tokenData;
 			if (this.syncState?.rootFolderId !== rootFolderId) {
 				this.syncState = {
 					files: {},
 					rootFolderId,
-					rootFolderName: driveFolderName,
+					rootFolderName,
 					lastSyncTime: 0,
 				};
 			} else {
-				this.syncState.rootFolderName = driveFolderName;
+				this.syncState.rootFolderName = rootFolderName;
 			}
 			this.authorizationUpgradeRequired = false;
 			this.syncCoordinator.clear();
